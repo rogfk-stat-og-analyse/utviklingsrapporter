@@ -1,0 +1,35 @@
+---
+title: "Utviklingsanalyse"
+subtitle: "KOMMUNE"
+
+latex-tinytex: false
+latex-auto-install: false
+
+format:
+  beamer:
+    classoption: landscape
+    lang: nb
+    mainfont: apercu
+    sansfont: apercu
+    fontsize: 8pt
+    papersize: a4
+    logo: logo.png
+    header-includes: |
+      \usepackage[dvipsnames]{xcolor}
+      \definecolor{myblue}{RGB}{0, 105, 180}
+
+      \setbeamercolor{title}{fg=myblue}
+      \setbeamercolor{subtitle}{fg=myblue}
+
+      \setbeamerfont{title}{size=\huge}
+      \setbeamerfont{subtitle}{size=\Large}
+
+      \setbeamertemplate{navigation symbols}{}
+
+      \setbeamertemplate{background}{
+        \includegraphics[
+          width=\paperwidth,
+          height=\paperheight
+        ]{Folkehelse_Morgen_RGB@2x.png}
+      }
+---

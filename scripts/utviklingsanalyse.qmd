@@ -1,0 +1,1722 @@
+---
+params:
+  kommunenavn: "Sandnes"
+execute:
+  cache: false
+  freeze: false
+latex-tinytex: false
+latex-auto-install: false
+format:
+  beamer:  
+    classoption: landscape
+    lang: nb  
+    mainfont: apercu  
+    sansfont: apercu  
+    header-includes: |
+      \usepackage[dvipsnames]{xcolor}
+      \definecolor{myblue}{RGB}{0, 105, 180}
+
+      \setbeamercolor{frametitle}{fg=myblue}
+      \setbeamercolor{section title}{fg=myblue}
+      \setbeamercolor{mini frame}{fg=myblue}
+      \setbeamerfont{section title}{size=\huge}
+
+      \input{footer.tex}
+
+      \setbeamertemplate{footline}{%
+        \leavevmode%
+        \hbox to 0pt{%
+          \hspace{0.4cm}%
+          \raisebox{0.2cm}[0pt][0pt]{\kommunenavn}%
+          \hss%
+        }%
+      }
+
+      \AtBeginSection{
+        {
+          \usebackgroundtemplate{%
+            \includegraphics[
+              width=\paperwidth,
+              height=\paperheight
+            ]{Næringsliv_Dis_RGB@2x.png}
+          }
+          \begin{frame}[plain]
+            \sectionpage
+          \end{frame}
+
+          \usebackgroundtemplate{}
+        }
+      }
+    fontsize: 8pt
+    papersize: a4  
+    slide-level: 2  
+    section-titles: true
+    fig-format: png
+    outertheme: smoothbars
+    logo: logo.png
+    urlcolor: myblue
+    linkcolor: myblue
+echo: false
+warning: false
+knitr:
+  opts_chunk:
+    dev: cairo_pdf
+    dev.args:
+      bg: transparent
+---
+
+```{r}
+
+# TODO: Rydd opp fortløpende. Fjern objekter når de er ferdig brukt
+# TODO: Flere tilleggstekster? Kanskje mot slutten
+if (!require(pacman)) install.packages("") # checks if pacman is installed
+require(pacman) # loads pacman, then pacman loads packages
+p_load(
+  dplyr,
+  #extrafont,
+  fpp3,
+  ggplot2,
+  ggrepel,
+  #gt,
+  httr2,
+  knitr,
+  openxlsx,
+  purrr,
+  readr,
+  rjstat,
+  rogfktheme,
+  scales,
+  #showtext,
+  stringr,
+  tidyr,
+  waffle,
+  zoo
+)
+
+```
+
+```{r} 
+# Henter kommunenavn fra quarto render parameteren
+kommunenavn <- params$kommunenavn
+
+# Handy script for å deale med kommunesammenslåinger og delregioner
+source("../../scripts/kommunesamle.r")
+#source("kommunesamle.r")
+
+```
+
+```{r} 
+# Laster inn og filtrer data
+load("../../data/dfs_list.rds")
+#load("dfs_list.rds")
+
+bedrifter <- readRDS("../../data/bedrifter.rds")
+#bedrifter <- readRDS("bedrifter.rds")
+
+# Håndterer pendling separat
+dfs_list$pendling_inn <- subset(
+  dfs_list$pendling_inn,
+  arbeidsstedskommune == kommunenavn
+)
+
+dfs_list$pendling_ut <- subset(
+  dfs_list$pendling_ut,
+  bostedskommune == kommunenavn
+)
+
+# Tar pendling ut fra listen over data frames
+invisible(
+  list2env(
+    dfs_list[c("pendling_inn", "pendling_ut")],
+    envir = environment()
+  )
+)
+
+# Fjerner dem fra listen
+dfs_list[c("pendling_inn", "pendling_ut")] <- NULL
+
+# Filtrerer resten
+dfs_list <- lapply(
+  dfs_list,
+  kommunesamler
+) |>
+  lapply(
+    function(df) subset(df, region == kommunenavn)
+  )
+
+# "Pakker ut" listen med dataset
+invisible(
+  list2env(dfs_list, envir = environment())
+)
+
+# Sletter listen fra minnet
+#rm(dfs_list)
+```
+
+# Demografi
+
+## Befolkningsutvikling
+
+:::: {.columns}
+::: {.column width="70%"}
+<!--{{{ fig-befolkningsutvikling -->
+```{r} 
+#| label:  fig-befolkningsutvikling
+#| fig-cap: "Kilde: [SSB 07459](https://www.ssb.no/statbank/table/07459)"
+
+befolkning <- befolkning |>
+  mutate(år = as.integer(år))
+
+befolkning_agg <- befolkning |>
+  group_by(år) |>
+  summarise(Befolkning = sum(value)) |>
+  mutate(
+    Endring = (Befolkning - lag(Befolkning)) / Befolkning * 100,
+    Befolkning = Befolkning
+  )
+
+# Setter grenser for de to aksene
+ylim_prim <- c(
+  0,
+  max(befolkning_agg$Befolkning) * 1.01
+) # NOTE: Denne løsningen kan få problemer i kommuner med synkende innbyggertall
+ylim_sec <- c(-2.5, 5)
+
+# The following makes the necessary calculations based on these limits
+b <- diff(ylim_prim) / diff(ylim_sec)
+a <- ylim_prim[1] - b * ylim_sec[1]
+
+befolkning_agg |>
+  ggplot(aes(år, Befolkning)) +
+  geom_col(fill = "#93D6BCFF") +
+  geom_line(aes(y = a + Endring * b), color = "#0069B4", linewidth = 1) +
+  geom_text_repel(
+    data = subset(befolkning_agg, (max(år) - år) %% 2 == 0),
+    aes(
+      y = a + Endring * b,
+      label = gsub("\\.", ",", sprintf("%.2f%%", Endring)),
+    ),
+    direction = "y",
+    force = 20,
+    color = "#0069B4",
+    size = 3
+  ) +
+  geom_text(
+    data = subset(befolkning_agg, år == max(år)),
+    aes(label = Befolkning),
+    vjust = -0.5,
+    size = 3
+  ) +
+  coord_cartesian(
+    ylim = c(
+      0,
+      max(befolkning_agg$Befolkning) * 1.01
+    )
+  ) +
+  scale_y_continuous(
+    sec.axis = sec_axis(~ (. - a) / b, name = "Befolkningsvekst (%)")
+  ) +
+  scale_x_continuous(
+    breaks = seq(min(befolkning_agg$år), max(befolkning_agg$år), by = 2)
+  ) +
+  geom_hline(
+    yintercept = a,
+    color = "#0069B4",
+    linewidth = 0.5
+  ) +
+  labs(
+    x = NULL
+  ) +
+  rogfk +
+  theme(
+    axis.text.y.right = element_text(color = "#0069B4"),
+    axis.title.y.right = element_text(color = "#0069B4")
+  )
+
+```
+<!--}}}-->
+:::
+
+::: {.column width="30%"}
+
+`{r} kommunenavn` har opplevd en gjennomsnittlig befolkningsendring på 
+`{r} round(mean(befolkning_agg$Endring, na.rm = TRUE), 2)`% de siste 20 årene.
+
+\vspace{1em}
+
+Dette utgjør til sammen en endring på 
+`{r} befolkning_agg$Befolkning[befolkning_agg$år == max(befolkning_agg$år)] - befolkning_agg$Befolkning[befolkning_agg$år == min(befolkning_agg$år)]`
+innbyggere i løpet av perioden.
+:::
+
+::::
+
+
+
+## Befolkningsendring
+<!--{{{ fig-befolkningsendring -->
+```{r} 
+#| label: fig-befolkningsendring
+#| fig-cap: "Kilde: [SSB 01222](https://www.ssb.no/statbank/table/01222)"
+#| out-height: '0.75\textheight'
+
+stat_vars <- c(
+  "Fødselsoverskot", "Innvandring", "Utvandring", "Innflytting, innalandsk",
+  "Utflytting, innalandsk"
+)
+
+befolkningsendring <- befolkningsendring |>
+  subset(statistikkvariabel %in% stat_vars) |>
+  #select(-region) |>
+  mutate(
+    kvartal = as.yearqtr(kvartal, format = "%YK%q"),
+  ) |>
+    pivot_wider(
+    names_from = statistikkvariabel,
+    values_from = value
+  ) |>
+  transmute(
+    kvartal,
+    Fødselsoverskudd = Fødselsoverskot,
+    "Netto innvandring" = Innvandring - Utvandring,
+    "Netto flytting" = `Innflytting, innalandsk` - `Utflytting, innalandsk`
+  ) |>
+  pivot_longer(
+    -kvartal,
+    names_to = "statistikkvariabel",
+    values_to = "value"
+  )
+
+befolkningsendring |>
+  filter(kvartal >= max(kvartal) - 39 / 4) |>
+  ggplot(aes(x = kvartal, y = value, fill = statistikkvariabel)) +
+    geom_col() +
+    scale_fill_rogfk_d() +
+    scale_x_yearqtr(
+      format = "%Y K%q",
+      breaks = unique(befolkningsendring$kvartal)[seq(1, length(unique(befolkningsendring$kvartal)), by = 2)]
+    ) +
+    geom_text_repel(
+      data = \(x) subset(x, value != 0),
+      aes(label = value),
+      size = 2,
+      position = position_stack(vjust = 0.5),
+      direction = "y"
+    ) +
+    labs(
+      y = "Netto befolkningsendring",
+      x = NULL,
+      fill = NULL
+    ) +
+    rogfk +
+    theme(
+      axis.text.x = element_text(angle = 45, vjust = 0.5),
+      legend.position = "bottom"
+    )
+
+```
+<!--}}}-->
+
+## Demografisk fordeling
+
+:::: {.columns}
+::: {.column width="70%"}
+<!--{{{ fig-pyramide -->
+```{r} 
+#| label: fig-pyramide
+#| fig-cap: "Kilde: [SSB 07459](https://www.ssb.no/statbank/table/07459)"
+
+demografi <- befolkning[befolkning$år == max(befolkning$år), ] |>
+  mutate(alder = as.integer(sub("(\\d+).*", "\\1", alder)))
+
+# Lager først et plot med bare menn
+menn <-  ggplot(demografi,
+  aes(
+    x = alder,
+    fill = kjønn,
+    y = ifelse(
+      test = kjønn == "Menn",
+      yes = -value,
+      no = value
+    )
+  )
+) +
+  geom_bar(stat = "identity") +
+  scale_x_continuous(
+    breaks = seq(min(demografi$alder), max(demografi$alder), by = 10)
+  )
+
+# Setter sammen menn med kvinner for et komplett plot
+menn +
+  scale_y_continuous(
+    labels = abs,
+    limits = max(demografi$value) * c(-1, 1)
+  ) +
+  coord_flip() +
+  labs(
+    x = "Alder",
+    y = paste("Antall personer per", demografi$år),
+    fill = NULL,
+  ) +
+  scale_fill_rogfk_d() +
+  rogfk +
+  theme(
+    legend.position = "bottom"
+  )
+
+```
+<!--}}}-->
+::: 
+
+::: {.column width="30%"}
+
+En tilnærmet søyleformet demografisk fordeling betyr at eldre utgjør relativt
+større andel av befolkningen. En demografisk fordeling som ser mer ut som en
+pyramide tyder på en ekspanderende befolkning. På kommunenivå vil også
+studentflyt som regel være synlig i den demografiske fordelingen.
+
+::: 
+::::
+
+## Yrkesaktiv befolkning
+:::: {.columns}
+::: {.column width="70%"}
+<!--{{{ fig-yrkesaktiv-befolkning -->
+```{r} 
+#| label: fig-yrkesaktiv-befolkning
+#| fig_cap: "Andel i yrkesaktiv alder (20-66 år)"
+#| fig-cap: "Kilde: [SSB 07459](https://www.ssb.no/statbank/table/07459). Framskriving gjort internt av Rogaland fylkeskommune."
+
+framskriving <- befolkning |>
+  mutate(alder = as.integer(sub("(\\d+).*", "\\1", alder))) |>
+  #filter(alder < 67) |>
+  summarise(antall = sum(value), .by = c(alder, år))
+
+matrise <- framskriving |>
+  pivot_wider(names_from = alder, values_from = antall) |>
+  arrange(år)
+
+ald_cols <- names(matrise)[names(matrise) != "år"]
+ald_cols <- ald_cols[order(as.integer(ald_cols))]
+
+matrise <- matrise |>
+  select(år, all_of(ald_cols)) |>
+  data.matrix()
+
+# Gjennomsnittlige kohortrater (siste n år)
+n <- 10
+
+rate_mat <-
+  tail(matrise, n)[, 3:ncol(matrise)] /
+  tail(matrise, n + 1)[1:n, 2:(ncol(matrise) - 1)]
+
+rate_mat[!is.finite(rate_mat)] <- NA
+
+rater <- colMeans(rate_mat, na.rm = TRUE)
+
+aldre <- as.integer(colnames(matrise)[-1])
+
+# Bruker fødselsrate for f siste år for å framskrive 0-n-åringer
+
+f <- 5
+
+fødsler <- framskriving |>
+  filter(alder == 0) |>
+  arrange(år)
+
+nyfødte <- mean(tail(fødsler$antall, f))
+
+# Startbefolkning (siste observerte år)
+pop <- matrise[nrow(matrise), -1]
+
+# Framskrivning
+år_fram <- 10
+startår <- max(framskriving$år)
+
+# Lager en tom matrise for å putte det i
+framskrivingsmatrise <- matrix(
+  NA_real_,
+  nrow = år_fram,
+  ncol = length(pop)
+)
+
+for (i in seq_len(år_fram)) {
+
+  ny_pop <- rep(NA_real_, length(pop))
+
+  # nye 0-åringer
+  ny_pop[1] <- nyfødte
+
+  # øvrige aldre
+  ny_pop[-1] <- pop[-length(pop)] * rater
+
+  framskrivingsmatrise[i, ] <- ny_pop
+  pop <- ny_pop
+}
+
+colnames(framskrivingsmatrise) <- aldre
+
+resultat <- as.data.frame(framskrivingsmatrise) |>
+  mutate(
+    år = (startår + 1):(startår + år_fram),
+    .before = 1
+  )
+
+resultat[, -1] <- as.integer(round(as.matrix(resultat[, -1])))
+
+resultat_df <- resultat |>
+  pivot_longer(
+    cols = -år,
+    names_to = "alder",
+    values_to = "antall"
+  ) |>
+  mutate(alder = as.integer(alder))
+
+framskriving <- bind_rows(framskriving, resultat_df)
+
+yrkesaktiv_befolkning <- framskriving |>
+  mutate(
+    yrkesaktiv_alder = ifelse(alder > 19 & alder < 67, antall, 0)
+  ) |>
+  summarise(
+    antall = sum(na.omit(antall)),
+    yrkesaktiv_alder = sum(yrkesaktiv_alder),
+    ratio = (yrkesaktiv_alder / antall),
+    .by = "år"
+  ) |>
+  mutate(
+    framskriving = år > (max(år) - n)
+  )
+
+ggplot(
+  yrkesaktiv_befolkning,
+  aes(x = as.integer(år), y = ratio, color = framskriving)
+) +
+  geom_line(linewidth = 1.6) +
+  scale_y_continuous(
+    labels = percent,
+    expand = expansion(mult = c(0.5, 0.5))
+  ) +
+  scale_x_continuous(
+    breaks = seq(min(yrkesaktiv_befolkning$år), max(yrkesaktiv_befolkning$år), by = 2)
+  ) +
+  labs(
+    x = NULL,
+    y = "Prosentandel i yrkesaktiv alder (20-66 år)",
+  ) +
+  scale_color_rogfk_d(
+    labels = c("Historisk", "Framskriving"),
+    name = NULL
+  ) +
+  rogfk +
+  theme(
+    #axis.text.x = element_text(angle = 45),
+    legend.position = "bottom"
+  )
+
+# Antakelser:
+# - Fødselsraten satt til snitt av siste 5 år
+# - Kohortrater (netto flytting, innvandring og dødsrater for hver alderskohort)
+# satt til snitt av siste 10 år (for å ikke bli alt for påvirket av flyktninger
+# fra Ukraina)
+
+```
+<!--}}}-->
+::: 
+
+::: {.column width="30%"}
+
+Her er fødselsraten satt til et gjennomsnitt av de siste `{r} f` årene.
+Kohortraten (netto flytting, netto innvandring og dødsrater for hver alderskohort)
+er satt til et snitt av de siste `{r} n` årene. Denne har lenger horisont enn
+fødselsraten for å ikke bli uforholdsmessig påvirket av uvanlig mange flyktninger fra
+Ukraina ila. perioden.
+
+::: 
+::::
+
+## Innvandring
+:::: {.columns}
+::: {.column width="70%"}
+<!--{{{ fig-innvandring -->
+```{r} 
+#| label: fig-innvandring
+#| fig-cap: "Kilde: [SSB 09817](https://www.ssb.no/statbank/table/09817)"
+
+innvandrere <- innvandrere |>
+  #kommunesamler() |>
+  mutate(
+    år = as.integer(år),
+    landbakgrunn = case_when(
+      landbakgrunn == "Norden utenom Norge, EU/EFTA,  Storbritannia, USA, Canada, Australia, New Zealand" ~ "Vestlig",
+      TRUE ~ "Ikke-vestlig"
+    )
+  )
+
+befolkning_år <- befolkning |>
+  mutate(
+    alder = as.integer(sub("(\\d+).*", "\\1", alder)),
+    år = as.integer(år)
+  ) |>
+  summarise(antall = sum(value), .by = år)
+
+innvandrere_av_pop <- left_join(befolkning_år, innvandrere) |>
+  mutate(
+    andel = (value / antall)
+  ) |>
+  subset(år >= 2010)
+
+# Setter grenser for de to aksene
+ylim_prim <- c(
+  0,
+  max(innvandrere_av_pop$andel) * 1.01
+)
+
+ylim_sec <- c(
+  0,
+  max(innvandrere_av_pop$value) * 1.01
+)
+
+# Transformerer aksene
+b <- diff(ylim_prim) / diff(ylim_sec)
+a <- ylim_prim[1] - b * ylim_sec[1]
+
+innvandrere_av_pop |>
+  ggplot(aes(x = år, y = andel, fill = landbakgrunn)) +
+  geom_col() +
+  geom_line(aes(y = a + value * b, color = landbakgrunn), linewidth = 1.6) +
+  scale_x_continuous(
+    breaks = seq(min(innvandrere_av_pop$år), max(innvandrere_av_pop$år), by = 2)
+  ) +
+  scale_fill_rogfk_d() +
+  scale_color_rogfk_d() +
+  geom_text(
+    aes(
+      label = paste0(round(andel * 100, 1), "%"),
+    ),
+    size = 3,
+    position = position_stack(vjust = .5)
+  ) +
+  geom_text_repel(
+    aes(
+      y = a + value * b,
+      label = value,
+    ),
+    direction = "y",
+    force = 1,
+    size = 3
+  ) +
+  labs(
+    x = "År",
+    y = "Andel av befolkningen (%)",
+    fill = NULL,
+    color = NULL
+  ) +
+  coord_cartesian(
+    ylim = c(
+      0,
+      max(innvandrere_av_pop$andel) * 1.5
+    )
+  ) +
+  scale_y_continuous(
+    sec.axis = sec_axis(~ (. - a) / b, name = "Antall"),
+    labels = percent
+  ) +
+  rogfk +
+  theme(
+    legend.position = "bottom"
+  )
+
+antall_år <- innvandrere_av_pop |>
+  na.omit() |>
+  pull(år) |>
+  n_distinct()
+
+start_andel <- filter(innvandrere_av_pop, år == max(år) - (antall_år - 1)) |>
+  pull(andel) |>
+  sum()
+
+nå_andel <- filter(innvandrere_av_pop, år == max(år)) |>
+  pull(andel) |>
+  sum()
+
+endring <- innvandrere |>
+  subset(år == max(år) | år == min(år)) |>
+  summarise(
+    value = sum(value),
+    .by = år
+  )
+```
+<!--}}}-->
+::: 
+
+::: {.column width="30%"}
+
+Innvandrerandelen (inkludert norskfødte med innvandrerbakgrunn) i 
+`{r} kommunenavn` kommune har i løpet av de `{r} antall_år` siste årene gått fra
+`{r} scales::percent(accuracy = 0.01, start_andel)` til
+`{r} scales::percent(accuracy = 0.01, nå_andel)`. Dette tilsvarer en endring på 
+`{r} round(digits = 2, (nå_andel - start_andel) * 100)` prosentpoeng eller 
+`{r} endring[2,2] - endring[1,2]` personer.
+
+::: 
+::::
+
+
+<!--{{{ flytting -->
+```{r} 
+##| label: flytting
+##| fig-cap: "Kilde: [SSB 13255](https://www.ssb.no/statbank/table/13255)"
+
+#flytting <- dfs_list$flytting |>
+#  summarise(
+#    unge_ut = value[alder == "18-29 år" & statistikkvariabel == "Utflyttinger"],
+#    voksne_inn = value[alder == "30 år eller eldre" & statistikkvariabel == "Innflyttinger"],
+#    ratio = voksne_inn / unge_ut,
+#    .by = år
+#  )
+
+```
+<!--}}}-->
+
+# Kompetanse og utdanning
+
+## Utdanningsnivå `{r} max(as.integer(utdanningsnivå$år))`
+:::: {.columns}
+::: {.column width="70%"}
+<!--{{{ fig-utdanningsnivå -->
+```{r} 
+#| label: fig-utdanningsnivå
+#| fig-cap: "Kilde: [SSB 09429](https://www.ssb.no/statbank/table/09429)"
+
+utdanningsnivå <- utdanningsnivå |>
+  mutate(år = as.integer(år))
+
+utdanning_rogaland <- utdanning_rogaland |>
+  mutate(
+    år = as.integer(år),
+    region = "Rogaland"
+  ) |>
+  subset(år == max(år))
+
+utdanning_norge <- utdanning_norge |>
+  mutate(
+    år = as.integer(år),
+    region = "Norge"
+  ) |>
+  subset(år == max(år))
+
+utdanningsnivå_agg <- utdanningsnivå |>
+  subset(år == max(år) & kjønn == "Begge kjønn") |>
+  bind_rows(utdanning_norge, utdanning_rogaland)
+
+ggplot(utdanningsnivå_agg,
+       aes(nivå, value, fill = region)) +
+  geom_col(position = "dodge") +
+  labs(
+    x = NULL,
+    y = NULL,
+    fill = NULL
+  ) +
+  geom_text(
+    aes(label = percent(value, scale = 1, accuracy = 0.1)),
+    position = position_dodge(width = 1),
+    vjust = -0.5,
+    size = 3
+  ) +
+  scale_fill_rogfk_d() +
+  scale_x_discrete(
+    labels = \(x) str_wrap(x, width = 18)
+  ) +
+  scale_y_continuous(
+    labels = label_percent(scale = 1, accuracy = 1)
+  ) +
+  rogfk +
+  theme(
+    #axis.text.x = element_text(angle = 45, vjust = 0.5),
+    legend.position = "bottom"
+  )
+
+høyere_utdanning_def <- c(
+  "Universitets- og høgskolenivå, lang",
+  "Universitets- og høgskolenivå, kort",
+  "Fagskolenivå"
+)
+
+høyere_utdanning <- utdanningsnivå |>
+  na.omit() |>
+  subset(år == max(år) - 20 | år == max(år)) |>
+  summarise(
+    value = mean(value),
+    .by = c(år, nivå, kjønn)
+  ) |>
+  summarise(
+    høyere_utdanning = sum(value[nivå %in% høyere_utdanning_def]),
+    .by = c(år, kjønn)
+  )
+
+høyere_utdanning_tid <- høyere_utdanning |>
+  subset(kjønn == "Begge kjønn") |> 
+  mutate(
+    endring = høyere_utdanning[år == max(år)] - høyere_utdanning[år == min(år)],
+    valør = case_when(
+      endring >= 0 ~ "økt",
+      .default = "sunket"
+    )
+  )
+
+```
+<!--}}}-->
+::: 
+::: {.column width="30%"}
+
+Andelen som tar utdanning utover videregående skole i `{r} kommunenavn` har 
+`{r} høyere_utdanning_tid$valør[1]` med `{r} høyere_utdanning_tid$endring[1]` prosentpoeng siden
+`{r} høyere_utdanning_tid$år[1]`.
+
+::: 
+::::
+
+## Kjønnsfordelt utdanningsnivå `{r} max(as.integer(utdanningsnivå$år))`
+
+:::: {.columns}
+::: {.column width="70%"}
+<!--{{{ fig-kjønnsfordelt_utdanningsnivå -->
+```{r} 
+#| label: fig-kjønnsfordelt_utdanningsnivå
+#| fig-cap: "Kilde: [SSB 09429](https://www.ssb.no/statbank/table/09429)"
+
+utdanningsnivå |>
+  subset(år == max(år) & kjønn != "Begge kjønn") |>
+  ggplot(aes(nivå, value, fill = kjønn)) +
+  geom_col(position = "dodge") +
+  labs(
+    x = NULL,
+    y = NULL,
+    fill = NULL
+  ) +
+  geom_text(
+    aes(label = percent(value, scale = 1)),
+    position = position_dodge(width = 1),
+    vjust = -0.5,
+    size = 3
+  ) +
+  scale_fill_rogfk_d() +
+  scale_x_discrete(
+    labels = \(x) str_wrap(x, width = 18)
+  ) +
+  scale_y_continuous(
+    labels = label_percent(scale = 1, accuracy = 1)
+  ) +
+  rogfk +
+  theme(
+    #axis.text.x = element_text(angle = 45, vjust = 0.5),
+    legend.position = "bottom"
+  )
+
+høyere_utdanning_kjønn <- høyere_utdanning |>
+  summarise(
+    differanse = høyere_utdanning[kjønn == "Kvinner"] -
+      høyere_utdanning[kjønn == "Menn"],
+    .by = år
+  ) |> 
+  mutate(
+    endring = differanse[år == max(år)] - differanse[år == min(år)],
+    valør = case_when(
+      endring >= 0 ~ "økt",
+      .default = "sunket"
+    )
+  )
+
+```
+<!--}}}-->
+::: 
+::: {.column width="30%"}
+
+Siden `{r} høyere_utdanning$år[1]` har andelen kvinner som tar utdanning utover
+videregående relativt til andelen menn som gjør det samme 
+`{r} høyere_utdanning_kjønn$valør[1]` med `{r} høyere_utdanning_kjønn$endring[1]`
+prosentpoeng i `{r} kommunenavn`.
+
+::: 
+::::
+
+## Fagfelt blant sysslsatte `{r} max(fagfelt$år)`
+<!--{{{ fig-fagfelt -->
+```{r} 
+#| label: fig-fagfelt
+#| fig-cap: "Kilde: [SSB 11615](https://www.ssb.no/statbank/table/11615)"
+#| out-height: '0.75\textheight'
+
+fagfelt |>
+  subset(
+    år == max(år) &
+    statistikkvariabel == "Sysselsatte etter arbeidssted"
+  ) |>
+  summarise(
+    value = sum(value),
+    .by = fagfelt
+  ) |>
+  ggplot(aes(fagfelt, value)) +
+  geom_col(fill = "#80B4DAFF") +
+  labs(
+    x = NULL,
+    y = "Antall sysselsatte",
+    fill = NULL
+  ) +
+  geom_text(
+    aes(label = value),
+    position = position_dodge(width = 1),
+    vjust = -0.5,
+    size = 3
+  ) +
+  #scale_fill_manual("#80B4DAFF") +
+  scale_x_discrete(
+    labels = \(x) str_wrap(x, width = 18)
+  ) +
+  rogfk +
+  theme(
+    axis.text.x = element_text(angle = 45, vjust = 0.5)
+  )
+
+```
+<!--}}}-->
+
+# Sysselsetting og arbeidsmarked
+## Arbeidsstyrken
+:::: {.columns}
+::: {.column width="70%"}
+<!--{{{ fig-arbeisstyrken -->
+```{r} 
+#| label: fig-arbeisstyrken
+#| fig-cap: "Kilder: [SSB 11715](https://www.ssb.no/statbank/table/11715), [SSB 07984](https://www.ssb.no/statbank/table/07984) og [SSB 07459](https://www.ssb.no/statbank/table/07459)"
+
+#NOTE: BDO har data fra SSB på sysselsetting og uføre på kommune-alder nivå. Jeg
+# finner ikke det, har de bestilt dette?
+# Sysselsatte er etter bosted
+
+uføre <- uføre |>
+  kommunesamler()
+
+uføre_utvalg <- uføre |>
+  filter(år == max(år)) |>
+  mutate(
+    alder = case_when(
+      alder == "18-24 år" ~ "15-24 år",
+      alder == "25-34 år" | alder == "35-44 år" | alder == "45-54 år" ~ "25-54 år",
+      alder == "55-61 år" | alder == "62-67 år" ~ "55-66 år"
+    )
+  ) |>
+  group_by(alder) |>
+  summarise(
+    Uføre = sum(value)
+  )
+
+sysslere <- sysslere |>
+  kommunesamler()
+
+sysslere_utvalg <- sysslere |>
+  filter(år == max(uføre$år)) |>
+  mutate(
+    alder = case_when(
+      alder == "15-19 år" | alder == "20-24 år" ~ "15-24 år",
+      alder == "25-39 år" | alder == "40-54 år" ~ "25-54 år",
+      TRUE ~ alder
+    )
+  ) |>
+  group_by(alder) |>
+  summarise(
+    år = first(år),
+    Sysselsatte = sum(value)
+  )
+
+arbeidsstyrken <- befolkning[befolkning$år == max(uføre$år), ] |>
+  mutate(alder = as.integer(sub("(\\d+).*", "\\1", alder))) |>
+  filter(alder >= 15) |>
+  group_by(alder) |>
+  summarise(
+    år = first(år),
+    personer = sum(value)
+  ) |>
+  ungroup() |>
+  mutate(
+    alder = case_when(
+      alder >= 15 & alder <= 24 ~ "15-24 år",
+      alder >= 25 & alder <= 54 ~ "25-54 år",
+      alder >= 55 & alder <= 66 ~ "55-66 år",
+      alder >= 67 & alder <= 74 ~ "67-74 år",
+      alder >= 75 ~ "Over 74 år",
+    )
+  ) |>
+  group_by(alder) |>
+  summarise(personer = sum(personer)) |>
+  left_join(sysslere_utvalg) |>
+  left_join(uføre_utvalg) |>
+  mutate(år = first(år))
+
+
+arbeidsstyrken[is.na(arbeidsstyrken)] <- 0
+
+arbeidsstyrken <- arbeidsstyrken |>
+  mutate(
+    alder = factor(
+      alder,
+      levels = c(
+        "15-24 år", "25-54 år",
+        "55-66 år", "67-74 år", "Over 74 år"
+      )
+    ),
+    Øvrige = personer - (Uføre + Sysselsatte)
+  ) |>
+  pivot_longer(
+    cols = c(Uføre, Sysselsatte, Øvrige),
+    names_to = "arbeidsstatus",
+    values_to = "Antall"
+  )
+
+ggplot(arbeidsstyrken, aes(x = alder, y = Antall, fill = arbeidsstatus)) +
+  geom_col() +
+  geom_text(
+    data = subset(arbeidsstyrken, Antall != 0),
+    aes(label = Antall),
+    size = 3.2,
+    position = position_stack(vjust = 0.5),
+  ) +
+  scale_fill_rogfk_d() +
+  labs(
+    x = NULL,
+    fill = NULL
+  ) +
+  rogfk +
+  theme(
+    legend.position = "bottom"
+  )
+
+totalt <- summarise(
+  arbeidsstyrken[arbeidsstyrken$år == max(arbeidsstyrken$år), ],
+  sum(Antall),
+  .by = arbeidsstatus
+)
+
+```
+<!--}}}-->
+::: 
+
+::: {.column width="30%"}
+
+Kategorien "Øvrige" inkluderer elever, studenter, pensjonister og andre
+som står utenfor arbeid, men ikke er uføretrygdede.
+
+Totalt var det `{r} totalt[1, 2]` uføretrygdede, mot `{r} totalt[2, 2]`
+sysselsatte i `{r} kommunenavn` i `{r} max(arbeidsstyrken$år)`.
+
+::: 
+::::
+
+## Sysselsatte per næringsgruppe med antall eldre
+
+:::: {.columns}
+::: {.column width="70%"}
+<!--{{{ fig-eldre_per_næringsgruppe -->
+```{r} 
+#| label: fig-eldre_per_næringsgruppe
+#| fig-cap: "Kilde: [SSB 07984](https://www.ssb.no/statbank/table/07984)"
+
+sysslere_næring_alder <- sysslere_næring |>
+  subset(år == max(år)) |>
+  mutate(
+    alder = ifelse(
+      alder %in% c("55-66 år", "67-74 år"),
+      alder,
+      "Under 55 år"
+    ),
+    alder = factor(
+      alder,
+      levels = c("67-74 år", "55-66 år", "Under 55 år")
+    ),
+    næringsgr = `næring (SN2007)`
+  ) |>
+  summarise(
+    value = sum(value),
+    .by = c(næringsgr, alder)
+  )
+
+sysslere_næring_alder |>
+  ggplot(aes(x = value, y = næringsgr, fill = alder)) +
+  geom_col() +
+  scale_fill_rogfk_d(
+    guide = guide_legend(reverse = TRUE)
+  ) +
+  geom_text_repel(
+    data = subset(sysslere_næring_alder, value != 0),
+    aes(
+      label = ifelse(alder == "Under 55 år", "", value)
+    ),
+    position = position_stack(vjust = 0.5),
+    direction = "x",
+    force = 10,
+    size = 3
+  ) +
+  labs(
+    x = "Antall sysselsatte",
+    y = "Næringsgruppe",
+    fill = ""
+  ) +
+  rogfk +
+  theme(
+    legend.position = "bottom",
+    panel.grid.major.y = element_blank()
+  )
+
+```
+<!--}}}-->
+:::
+::: {.column width="30%"}
+
+Grafen viser *arbeidskommune* og ikke *bokommune* for siste tilgjengelige år
+(`{r} max(sysslere_næring$år)`). Det vil si antall sysselsatte per næringsgruppe
+blant de som jobber i `{r} kommunenavn`, uavhengig av hvor de er bosatt.
+
+:::
+::::
+
+## Kjønnsfordeling per næringsgruppe 
+
+:::: {.columns}
+::: {.column width="70%"}
+<!--{{{ fig-kjønnsfordelt_næringsgrupper -->
+```{r} 
+#| label: fig-kjønnsfordelt_næringsgrupper
+#| fig-cap: "Kilde: [SSB 07984](https://www.ssb.no/statbank/table/07984)"
+
+sysslere_næring_kjønn <- sysslere_næring |>
+  mutate(
+    næringsgr = `næring (SN2007)`,
+  ) |>
+  summarise(
+    value = sum(value),
+    .by = c(kjønn, næringsgr)
+  ) |>
+  mutate(
+    total = sum(value),
+    .by = næringsgr
+  ) |>
+  mutate(
+    prosent = value / total, accuracy = 1
+  )
+
+sysslere_næring_kjønn  |>
+  ggplot(aes(x = prosent, y = næringsgr, fill = kjønn)) +
+  geom_col() +
+  scale_fill_rogfk_d(
+    guide = guide_legend(reverse = TRUE)
+  ) +
+  geom_text(
+    aes(
+      label = label_percent(accuracy = 1)(prosent)
+    ),
+    position = position_stack(vjust = 0.5),
+    size = 3.2
+  ) +
+  labs(
+    x = NULL,
+    y = "Næringsgruppe",
+    fill = ""
+  ) +
+  scale_x_continuous(labels = label_percent(accuracy = 1)) +
+  rogfk +
+  theme(
+    legend.position = "bottom",
+    panel.grid.major.y = element_blank()
+  )
+```
+<!--}}}-->
+:::
+
+::: {.column width="30%"}
+Grafen viser *arbeidskommune* og ikke *bokommune* for siste tilgjengelige år
+(`{r} max(sysslere_næring$år)`).
+:::
+::::
+
+## Uføre
+:::: {.columns}
+::: {.column width="70%"}
+
+<!--{{{ fig-uføre -->
+```{r} 
+#| label: fig-uføre
+#| fig-cap: "Kilde: [SSB 11715](https://www.ssb.no/statbank/table/11715)"
+
+uføre <- uføre |>
+  mutate(
+    år = as.integer(år)
+  )
+
+uføre |>
+  ggplot(aes(x = år, y = value, color = alder)) +
+  geom_line(linewidth = 1.6) +
+  scale_x_continuous(
+    breaks = seq(min(uføre$år), max(uføre$år), by = 2)
+  ) +
+  labs(
+    x = NULL,
+    y = "Antall uføre",
+    color = NULL
+  ) +
+  geom_text_repel(
+    data = subset(uføre, (max(år) - år) %% 2 == 0),
+    aes(
+      x = år,
+      label = value
+    ),
+    show.legend = FALSE,
+    force = 30,
+    size = 3.2
+  ) +
+  scale_color_rogfk_d() +
+  #scale_color_brewer(type = "div") +
+  #scale_fill_viridis_d() +
+  rogfk +
+  theme(
+    legend.position = "bottom",
+    #panel.background = element_rect(fill = "#efece6"),
+    #plot.background = element_rect(fill = "#efece6"),
+    #legend.background = element_rect(fill = "#efece6")
+  )
+
+endringer <- uføre |>
+  group_by(alder) |>
+  summarise(
+    endring = value[år == max(år)] - value[år == min(år)],
+    endring_pct = value[år == max(år)] / value[år == min(år)] - 1
+  )
+```
+<!--}}}-->
+
+::: 
+::: {.column width="30%"}
+
+Den aldersgruppen som har hatt størst økning i uføretrygdede siden
+`{r} min(uføre$år)` er de på
+`{r} endringer$alder[endringer$endring == max(endringer$endring)]` som har økt
+med `{r} max(endringer$endring)` personer. Dette tilsvarer en økning på 
+`{r} scales::percent(endringer$endring_pct[endringer$endring == max(endringer$endring)])`
+. Den prosentvis høyeste økningen har vært blant de som er 
+`{r} endringer$alder[endringer$endring_pct == max(endringer$endring_pct)]`, som
+har økt med `{r} scales::percent(max(endringer$endring_pct))`, dvs 
+`{r} endringer$endring[endringer$endring_pct == max(endringer$endring_pct)]` nye
+uføre.
+
+::: 
+::::
+
+## Arbeidsledighet
+
+:::: {.columns}
+::: {.column width="70%"}
+
+<!--{{{ fig-sysselsetting -->
+```{r} 
+#| label: fig-sysselsetting
+#| fig-cap: "Kilde: [SSB 11607](https://www.ssb.no/statbank/table/11607)"
+
+# TODO: Hadde lyst til å ha sysselsettingsGRAD men det har vist seg å være
+# vanskelig... må nok inn i microdata i såfall. Fra SSB 11607 har vi
+# sysselsettingsgrad blant innvandrere, men det blir fullt kaos med
+# kommunesammenslåingene og jeg mangler tall fra SSB API på innvandrere med
+# kommune og alder. Prøver å lage sysselsettingsgrad for befolkningen som helhet
+# da..Men da får jeg et problem med at innvandrertallene mine er inkludert
+# norskfødte mens det er ikke sysselsetting..
+# Går over til å bruke neets statistikk for å få andelstall som ikke blir fucked
+
+neets <- dfs_list$neets |>
+  mutate(
+    år = as.integer(år),
+  ) |>
+  mutate(
+    total = sum(value),
+    andel = value / total,
+    .by = c(år, innvandringskategori)
+  ) |>
+  subset(
+    `prioritert arbeidsstyrkestatus` !=
+      "I arbeid, under utdanning eller på arbeidsmarkedstiltak"
+  )
+
+neets |>
+  ggplot(aes(år, andel, color = innvandringskategori)) +
+  geom_line(
+    linewidth = 1.6
+  ) +
+  geom_text_repel(
+    data = subset(neets, (max(år) - år) %% 2 == 0),
+    aes(
+      x = år,
+      label = percent(andel, accuracy = .1)
+    ),
+    show.legend = FALSE,
+    force = 40,
+    direction = "y",
+    size = 3.2
+  ) +
+  labs(
+    x = "År",
+    y = "Andel som står utenfor arbeid, utdanning og arbeidsmarkedstiltak",
+    color = NULL
+  ) +
+  scale_y_continuous(labels = label_percent(accuracy = 1)) +
+  scale_color_rogfk_d() +
+  rogfk +
+  theme(
+    legend.position = "bottom"
+  )
+
+```
+<!--}}}-->
+
+::: 
+
+::: {.column width="30%"}
+
+De som står utenfor arbeid, utdanning og arbeidsmarkedstiltak er en veldig
+sammensatt gruppe som består av alt fra hjemmeværende forsørgere, nyutdannede,
+folk som er mellom jobber, uføre og så videre. Per 2026 mottar kun omkring 60%
+av disse overføringer fra NAV, og av disse er over 80% uføretrygdede.
+
+::: 
+::::
+
+## Kvartalvis antall lønnstakere per næring
+
+:::: {.columns}
+::: {.column width="70%"}
+
+<!--{{{ Lønnstakere og jobber, etter region, kvartal og næring -->
+```{r} 
+#| label: Nærignsstruktur
+#| fig-cap: "Kilde: [SSB 11657](https://www.ssb.no/statbank/table/11657)"
+
+# TODO: Heller enn prosentfordeling i siste år bør høyre side vise endringen
+# over perioden
+
+lønnstakere_næring <- dfs_list$lønnstakere_næring |>
+  mutate(
+    kvartal = as.yearqtr(kvartal, format = "%YK%q"),
+    næring = `næring (SN2007)`
+  ) |>
+  mutate(
+    totalt = sum(value),
+    .by = kvartal
+  ) |>
+  mutate(
+    andel = value / totalt,
+    .by = c(kvartal, næring)
+  )
+
+lønnstakere_næring |>
+  ggplot(
+    aes(x = kvartal, y = value, color = næring, fill = næring)
+  ) +
+  geom_area() +
+  geom_text(
+    data = lønnstakere_næring |>
+      arrange(kvartal) |>
+      summarise(
+        først = first(value),
+        sist = last(value),
+        .by = næring
+      ),
+    aes(
+      x = Inf,
+      y = sist,
+      label = sist - først
+    ),
+    position = position_stack(vjust = 0.5),
+    #color = "black",
+    hjust = 1
+  ) +
+  labs(
+    x = "Kvartal",
+    y = "Antall sysselsatte",
+    color = NULL,
+    fill = NULL
+  ) +
+  scale_color_rogfk_d(
+    labels = \(x) str_wrap(x, width = 25)
+  ) +
+  scale_fill_rogfk_d(
+    labels = \(x) str_wrap(x, width = 25)
+  ) +
+  #scale_y_continuous(labels = label_percent(accuracy = 1)) +
+  rogfk +
+  coord_cartesian(clip = "off") +
+  theme(
+    legend.position = "bottom"
+  )
+
+```
+<!--}}}-->
+
+::: 
+
+::: {.column width="30%"}
+
+Tallene til høyre i grafen angir endringen i antall sysselsatte per
+næringsgruppe i løpet av perioden.
+
+::: 
+::::
+
+## Pendlemønster for `{r} kommunenavn`
+
+<!--{{{ fig-pendling-inn-ut -->
+```{r} 
+#| label: fig-pendling-inn-ut
+#| out-height: '0.75\textheight'
+
+pendling_inn <- pendling_inn |>
+  filter(år == max(år), bostedskommune != kommunenavn) |>
+  slice_max(order_by = value, n = 50, with_ties = FALSE) |>
+  mutate(pendling = paste0("Pendlere inn til ", kommunenavn))
+
+pendling_ut <- pendling_ut |>
+  filter(år == max(år), !arbeidsstedskommune %in% kommunenavn) |>
+  slice_max(order_by = value, n = 50, with_ties = FALSE) |>
+  mutate(pendling = paste0("Pendlere ut fra ", kommunenavn))
+
+pendlerstrøm <- bind_rows(pendling_inn, pendling_ut) |>
+  mutate(
+    kommune = if_else(
+      pendling == paste0("Pendlere inn til ", kommunenavn),
+      bostedskommune,
+      arbeidsstedskommune
+    )
+  ) |>
+  reframe(
+    volum = sum(value),
+    arbeidsstedskommune = arbeidsstedskommune,
+    bostedskommune = bostedskommune,
+    år = år,
+    value = value,
+    pendling = pendling,
+    .by = "kommune"
+  ) |>
+  slice_max(order_by = volum, n = 20, with_ties = FALSE)
+
+ggplot(pendlerstrøm,
+       aes(kommune, value, fill = pendling)) +
+  geom_col(position = "dodge") +
+  labs(
+    x = NULL,
+    y = NULL,
+    fill = NULL
+  ) +
+  geom_text(
+    aes(label = value),
+    position = position_dodge(width = 0.8),
+    vjust = -0.5,
+    size = 3
+  ) +
+  scale_fill_rogfk_d() +
+  rogfk +
+  theme(
+    axis.text.x = element_text(angle = 45, vjust = 0.5),
+    legend.position = "bottom"
+  )
+```
+<!--}}}-->
+
+## Utvikling i pendling
+
+:::: {.columns}
+::: {.column width="70%"}
+<!--{{{ fig-pendling-utvikling -->
+```{r} 
+#| label: fig-pendling-utvikling
+#| fig-cap: "Kilde: [SSB 11616](https://www.ssb.no/statbank/table/11616)"
+
+pendling <- pendling |>
+  #kommunesamler() |>
+  mutate(
+    år = as.integer(år)
+  ) |>
+  filter(
+    år >= (max(år) - 10),
+    statistikkvariabel %in% c(
+      "Personer som pendler ut av regionen",
+      "Personer som pendler inn i regionen"
+    )
+  )
+
+pendling |>
+  ggplot(aes(år, value,
+    group = statistikkvariabel,
+    colour = statistikkvariabel
+  )) +
+  geom_line(linewidth = 1.6) +
+  geom_text_repel(
+    aes(label = value),
+    direction = "y",
+    force = 50,
+    size = 3.2,
+    show.legend = FALSE
+  ) +
+  labs(
+    x = NULL,
+    y = NULL,
+    colour = NULL
+  ) +
+  scale_x_continuous(breaks = seq(min(pendling$år), max(pendling$år), by = 2)) +
+  scale_color_rogfk_d() +
+  rogfk +
+  theme(
+    legend.position = "bottom"
+  )
+
+endring <- pendling$value[pendling$år == min(pendling$år)] /
+  pendling$value[pendling$år == max(pendling$år)]
+
+```
+<!--}}}-->
+:::
+
+::: {.column width="30%"}
+
+Dette tilsvarer en prosentvis endring i inn- og ut-pendling på henholdsvis
+`{r} scales::percent(endring[1])` og `{r} scales::percent(endring[2])` i løpet av de siste 10 
+årene.
+
+:::
+::::
+## Nye foretak per kvartal
+
+<!--{{{ nye_foretak -->
+```{r} 
+#| label: nye_foretak
+#| fig-cap: "Kilde: [SSB 08076](https://www.ssb.no/statbank/table/08076)"
+#| out-height: '0.75\textheight'
+
+foretak <- foretak |>
+  mutate(
+    kvartal = as.yearqtr(kvartal, format = "%YK%q"),
+  )
+
+foretak |>
+  summarise(value = sum(value), .by = kvartal) |>
+  ggplot(aes(x = kvartal, y = value)) +
+  geom_line(linewidth = 1.6,  aes(color = "Antall nye foretak")) +
+  scale_x_yearqtr(
+    breaks = seq(min(foretak$kvartal), max(foretak$kvartal), by = .5)
+  ) +
+  scale_color_manual(
+    values = c(
+      "Antall nye foretak" = "#0069B4",
+      "Trend" = "#28AD78"
+    )
+  ) +
+  geom_smooth(method = lm, se = FALSE, aes(color = "Trend")) +
+  labs(
+    x = "Kvartal",
+    y = NULL,
+    color = NULL
+  ) +
+  rogfk +
+  theme(
+    axis.text.x = element_text(angle = 45, vjust = 0.5),
+    legend.position = "bottom"
+  )
+
+# TODO: Regn ut nye foretak per år
+```
+<!--}}}-->
+
+## Foretak med positivt driftsresultat
+:::: {.columns}
+::: {.column width="70%"}
+<!--{{{ fig- -->
+```{r} 
+#| label: fig-driftresultat
+#| fig-cap: "Kilde: [Enhetsregisteret](https://data.brreg.no/enhetsregisteret/api/enheter/lastned/regneark) og [regnskapsregisteret](https://brreg.no)."
+
+bedrifter |>
+  ggplot(aes(shortName.y, andel)) +
+  geom_col(fill = "#80B4DAFF") +
+  #geom_col(aes(fill = andel)) +
+  scale_x_discrete(
+    labels = \(x) str_wrap(x, width = 10)
+  ) +
+  scale_y_continuous(labels = percent) +
+  labs(
+    y = "Andel",
+    x = NULL
+  ) +
+  scale_fill_continuous() +
+  rogfk +
+  theme(
+    axis.text.x = element_text(angle = 45, vjust = 0.5, size = 8),
+    legend.position = "none"
+  )
+```
+<!--}}}-->
+::: 
+
+::: {.column width="30%"}
+
+Ettersom underenheter ikke rapporterer driftsresultat gjelder dette kun
+hovedenheter som er registrert i `{r} kommunenavn`. Enkeltmannsforetak og
+små bedrifter er ikke regnskapspliktige og er følgelig heller ikke inkludert.
+
+::: 
+::::
+
+# Bolig
+## Boligbeholdning
+:::: {.columns}
+::: {.column width="70%"}
+<!--{{{ fig-boligtyper-beholdning -->
+```{r} 
+#| label: fig-boligtyper-beholdning
+#| fig-cap: "Kilde: [SSB 06265](https://www.ssb.no/statbank/table/06265)"
+
+boliger <- boliger |>
+  #kommunesamler() |>
+  group_by(bygningstype) |>
+  mutate(
+    endring = value - lag(value),
+    år = as.integer(år)
+  ) |>
+  filter(år >= (max(år) - 10))
+
+filter(boliger, år == max(år)) |>
+  ggplot(
+    aes(label = bygningstype, values = value)
+  ) +
+  geom_pictogram(
+    n_rows = 10,
+    aes(color = bygningstype),
+    make_proportional = TRUE,
+    #flip = TRUE
+  ) +
+  scale_color_manual(
+    name = NULL,
+    values =  c(
+      "#0069B4", "#28AD78", "#FFA9FB", "#FF4C2E", "#8874E3", "#25317A"
+    ),
+    labels = c(
+      "Andre bygningstyper", "Boligblokk", "Bygning for bofelleskap",
+      "Enebolig", "Rekkehus, kjedehus og andre småhus", "Tomannsbolig"
+    )
+  ) +
+  scale_label_pictogram(
+    name = NULL,
+    values = c(
+      "store", "building", "hotel", "home", "city", "store-alt"
+  ),
+    labels = c(
+      "Andre bygningstyper", "Boligblokk", "Bygning for bofelleskap",
+      "Enebolig", "Rekkehus, kjedehus og andre småhus", "Tomannsbolig"
+    )
+) +
+  rogfk +
+  theme(
+    axis.text.y = element_blank(),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.line.x.bottom = element_blank(),
+    panel.grid.major.y = element_blank(),
+    legend.position = "bottom"
+  )
+
+mest <- subset(boliger, år == max(år)) |> subset(value == max(value))
+nestmest <- subset(boliger, år == max(år)) |>
+  subset(value < max(value)) |>
+  subset(value == max(value))
+
+```
+<!--}}}-->
+
+::: 
+
+::: {.column width="30%"}
+
+`{r} kommunenavn` hadde per `{r} mest$år`, `{r} mest$value` 
+`{r} tolower(mest$bygningstype)`.
+
+Den nest vanligste boligtypen var
+`{r} tolower(nestmest$bygningstype)`, med `{r} nestmest$value` boenheter.
+
+::: 
+::::
+
+## Utvikling i boligmarkedet
+<!--{{{ fig-boligtyper-endring -->
+```{r} 
+#| label: fig-boligtyper-endring
+#| fig-cap: "Kilde: [SSB 06265](https://www.ssb.no/statbank/table/06265)"
+#| out-height: '0.75\textheight'
+
+boliger |>
+  ggplot(aes(x = år, y = endring, fill = bygningstype)) +
+  geom_col() +
+  scale_x_continuous(
+    breaks = seq(min(boliger$år), max(boliger$år), by = 2)
+  ) +
+  scale_fill_rogfk_d() +
+  labs(
+    x = NULL,
+    y = "Endrign i antall boliger",
+    fill = NULL
+  ) +
+  rogfk +
+  theme(
+    legend.position = "bottom"
+  )
+
+```
+<!--}}}-->
+
+## Fritidsboliger
+:::: {.columns}
+::: {.column width="70%"}
+<!--{{{ fig-fritidsboliger -->
+```{r} 
+#| label: fig-fritidsboliger
+#| fig-cap: "Kilde: [SSB 03174](https://www.ssb.no/statbank/table/03174)"
+#| out-height: '0.75\textheight'
+
+hytter <- hytter |>
+  select(-region, -statistikkvariabel) |>
+  mutate(år = as.integer(år)) |>
+  filter(år >= (max(år) - 10)) |>
+  summarise(hytter = sum(value), .by = år)
+
+hytter |>
+  ggplot(aes(x = år, y = hytter)) +
+  geom_line(linewidth = 1.6, color = "#0069B4") +
+  geom_text_repel(
+    aes(label = hytter),
+    color = "#0069B4",
+    force = 50,
+    size = 3.2,
+  ) +
+  scale_x_continuous(
+    breaks = seq(min(hytter$år), max(hytter$år), by = 2)
+  ) +
+  labs(
+    x = NULL,
+    y = "Fritidsboliger"
+  ) +
+  scale_color_rogfk_c() +
+  rogfk
+```
+<!--}}}-->
+::: 
+
+::: {.column width="30%"}
+
+Spesielt store endringer i antall registrerte fritidsboliger skyldes trolig
+oppryddinger i registerdata.
+
+::: 
+::::
